@@ -431,55 +431,112 @@ public class Model implements Iterable<Node>, SyncAccess {
      * @return The number of clock cycles necessary to get the positive edge
      */
     public BreakInfo runToBreakMicro(int timeout) {
-        if (brVal == null) {
-            brVal = new ArrayList<>();
-            for (Break b : breaks)
-                brVal.add(new BreakDetector(b));
-            if (!brVal.isEmpty())
-                fireEvent(ModelEvent.RUN_TO_BREAK);
-        }
+        initializeBreakDetectors();
 
         if (brVal.isEmpty()) {
             // simply stabilize the circuit
             doStep();
         } else {
-            ObservableValue clkVal = null;
-            if (clocks.size() == 1)
-                clkVal = clocks.get(0).getClockOutput();
+            ObservableValue clkVal = getClockValue();
 
-            while (state != State.CLOSED) {
+            while (!isCircuitClosed()) {
                 if (!needsUpdate()) {
                     if (clkVal != null)
-                        clkVal.setBool(!clkVal.getBool());
+                        toggleClkVal(clkVal);
                     else
                         break;
                 }
-                final BreakDetector[] wasBreak = {null};
-                stepWithCondition(false, () -> {
-                    for (BreakDetector bd : brVal)
-                        if (bd.detected()) {
-                            fireEvent(ModelEvent.BREAK);
-                            wasBreak[0] = bd;
-                        }
-                    return needsUpdate() && wasBreak[0] == null;
-                });
-
-                if (wasBreak[0] != null) {
+                BreakDetector detectedBreak = detectBreak();
+                if (detectedBreak != null) {
                     brVal = null;
-                    return wasBreak[0].createInfo();
+                    return detectedBreak.createInfo();
                 }
 
-                if (timeout > 0) {
+                BreakInfo numOfClockCycle = handleTimeoutMechanism(timeout);
+                if (numOfClockCycle != null){
+                    return numOfClockCycle;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * This method handles the timeout and returns a new BreakInfo if timeout is 1 
+     * @param timeout the timeout half cycle count, -1 means infinite
+     * @return The number of clock cycles necessary to get the positive edge, null if timeout is not 1
+     */
+    private BreakInfo handleTimeoutMechanism (int timeout){
+        if (timeout > 0) {
                     timeout--;
                     if (timeout == 0) {
                         fireEvent(ModelEvent.RUN_TO_BREAK_TIMEOUT);
                         return new BreakInfo(timeout);
                     }
                 }
+                return null;
+    }
+
+    /**
+    * This method initialize the Break detectors if they are not already initialized
+    */
+    private void initializeBreakDetectors() {
+        if (brVal == null) {
+            brVal = new ArrayList<>();
+            for (Break b : breaks) {
+                brVal.add(new BreakDetector(b));
+            }
+
+            if (!brVal.isEmpty()) {
+                fireEvent(ModelEvent.RUN_TO_BREAK);
             }
         }
-        return null;
     }
+
+    /**
+     * This method sets the clkVal to its opposite
+     * @param clkVal    An ObservableValue
+     */
+    private void toggleClkVal (ObservableValue clkVal){
+        clkVal.setBool(!clkVal.getBool());
+    }
+
+    private ObservableValue getClockValue() {
+        return clocks.size() == 1 ? clocks.get(0).getClockOutput() : null;
+    }
+
+    /**
+     * Returns true if circuit is true, false otherwise
+     * @return
+     */
+    private boolean isCircuitClosed() {
+        return state == State.CLOSED;
+    }
+
+    /**
+    * Detects a break and returns the BreakDetector if it is detected.
+    *
+    * @return The detected BreakDetector or null if nothing detected
+    */
+    private BreakDetector detectBreak() {
+        final BreakDetector[] wasBreak = {null};
+
+        stepWithCondition(false, () -> {
+            for (BreakDetector bd : brVal) {
+                if (bd.detected()) {
+                    fireEvent(ModelEvent.BREAK);
+                    wasBreak[0] = bd;
+                }
+            }
+
+            return needsUpdate() && wasBreak[0] == null;
+        });
+
+        return wasBreak[0];
+    }
+
+    
 
     /**
      * @return true if the models allows fast run steps
